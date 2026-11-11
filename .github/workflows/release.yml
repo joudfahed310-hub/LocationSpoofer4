@@ -7,7 +7,7 @@ on:
       - master
     paths:
       - 'app/build.gradle.kts'
-  workflow_dispatch: # تفعيل التشغيل اليدوي
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,7 +37,6 @@ jobs:
           fi
           
           if [ -z "$VERSION_NAME" ]; then
-            echo "Current versionName: Not Found, using manual-build"
             VERSION_NAME="manual"
           fi
           
@@ -57,16 +56,17 @@ jobs:
           fi
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      # 🟢 خطوة السحر: تفكيك إجبارية التوقيع في ملف Gradle الخاص بالمطور لتخطي خطأ storeFile
       - name: Strip Signing Configuration
         if: steps.check_version.outputs.changed == 'true'
         run: |
-          echo "حذف إعدادات التوقيع الإجبارية لتفادي أخطاء الـ Keystore المفقودة..."
           sed -i '/signingConfigs {/,/^    }/d' app/build.gradle.kts || true
           sed -i '/signingConfig = signingConfigs./d' app/build.gradle.kts || true
           
       - name: Build Debug APK
         if: steps.check_version.outputs.changed == 'true'
+        env:
+          # 🟢 الحل هنا: تمرير مفتاح وهمي بصيغة صحيحة لكي لا يجد التطبيق القيمة فارغة وينهار
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY || 'AIzaSyDummyKeyForBypassingCrash123456789' }}
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleDebug
@@ -84,7 +84,7 @@ jobs:
         with:
           tag_name: ${{ steps.check_version.outputs.tag }}
           name: LocationSpoofer ${{ steps.check_version.outputs.tag }}
-          body: "تلقائي: تم بناء التطبيق بنجاح وتجاوز شروط التوقيع الرقمي بنجاح."
+          body: "تلقائي: تم بناء التطبيق مع تمرير مفتاح خرائط لتفادي الانهيار عند الفتح."
           files: app/build/outputs/apk/release_output/LocationSpoofer-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
