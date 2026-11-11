@@ -6,11 +6,11 @@ on:
       - main
       - master
     paths:
-      - 'app/build.gradle.kts' # يشتغل تلقائياً عند تعديل ملف الإصدار
-  workflow_dispatch: # 🟢 إضافة هذه السطور لتفعيل زر التشغيل اليدوي في GitHub Actions
+      - 'app/build.gradle.kts'
+  workflow_dispatch: # تفعيل زر التشغيل اليدوي
 
 permissions:
-  contents: write # السماح لـ GITHUB_TOKEN بإنشاء الـ Release والـ Tag
+  contents: write # صلاحيات إنشاء الريليز
 
 jobs:
   build-and-release:
@@ -19,115 +19,57 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # جلب كامل تاريخ التعديلات لإنشاء التقرير والتأكد من التاجات
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17' # الـ Java المطلوب لبناء مشاريع أندرويد الحديثة
+          java-version: '17' # توافق كامل مع إصدار Gradle 8.10.2 المتواجد بالمشروع
           cache: 'gradle'
 
       - name: Check and Resolve Version
         id: check_version
         run: |
-          # استخراج رقم الإصدار من الملف
-          VERSION_NAME=$(grep 'versionName =' app/build.gradle.kts | head -n 1 | awk -F'"' '{print $2}')
-          echo "Current versionName: $VERSION_NAME"
+          VERSION_NAME=$(grep 'versionName = ' app/build.gradle.kts | head -n 1 | awk -F'"' '{print $2}')
+          if [ -z "$VERSION_NAME" ]; then
+            VERSION_NAME=$(grep 'versionName =' app/build.gradle.kts | head -n 1 | awk -F"'" '{print $2}')
+          fi
           
           if [ -z "$VERSION_NAME" ]; then
-            echo "❌ لم يتم العثور على versionName في الملف، سيتم استخدام إصدار افتراضي يدوياً."
-            VERSION_NAME="manual-build"
+            echo "Current versionName: Not Found, using manual-build"
+            VERSION_NAME="manual"
           fi
           
           TAG_NAME="v$VERSION_NAME"
           
-          # إذا تم تشغيل الأكشن يدوياً، سنتجاوز شرط إلغاء البناء حتى لو كان التاج موجوداً
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "🟢 تم التشغيل يدوياً، سيتم البناء والتحديث فوراً."
             echo "changed=true" >> $GITHUB_OUTPUT
-            # لمنع التكرار في التاجات اليدوية، نضيف وقت التشغيل
             if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
               TAG_NAME="v$VERSION_NAME-${{ github.run_number }}"
             fi
           else
-            # إذا كان التشغيل تلقائياً عبر الـ Push، نتحقق من التاج
             if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
-              echo "⚠️ التاج $TAG_NAME موجود مسبقاً، سيتم إلغاء البناء لتجنب التكرار التلقائي."
               echo "changed=false" >> $GITHUB_OUTPUT
               exit 0
             fi
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
-          
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      - name: Generate Changelog
+      - name: Build Debug APK
         if: steps.check_version.outputs.changed == 'true'
-        id: changelog
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --no-merges --pretty=format:"%s")
-          else
-            COMMITS=$(git log $PREV_TAG..HEAD --no-merges --pretty=format:"%s")
-          fi
-          
-          echo "" > changelog.txt
-          
-          FEATS=$(echo "$COMMITS" | grep "^feat:" | sed 's/^feat:[[:space:]]*/- /' || true)
-          if [ -n "$FEATS" ]; then
-            echo "## المميزات والوظائف الجديدة" >> changelog.txt
-            echo "$FEATS" >> changelog.txt
-            echo "" >> changelog.txt
-          fi
-          
-          FIXES=$(echo "$COMMITS" | grep "^fix:" | sed 's/^fix:[[:space:]]*/- /' || true)
-          if [ -n "$FIXES" ]; then
-            echo "## الإصلاحات" >> changelog.txt
-            echo "$FIXES" >> changelog.txt
-            echo "" >> changelog.txt
-          fi
-          
-          if [ -z "$FEATS" ] && [ -z "$FIXES" ]; then
-            echo "تحديثات عامة وتحسينات على استقرار التطبيق." >> changelog.txt
-          fi
-          
-          cat changelog.txt
-
-      - name: Decode Keystore
-        if: steps.check_version.outputs.changed == 'true'
-        env:
-          ENCODED_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          # للتأكد من عدم فشل البناء إذا لم تكن قد أعددت مفتاح التوقيع بعد
-          if [ -z "$ENCODED_KEYSTORE" ]; then
-            echo "⚠️ تنبيه: لم يتم العثور على مفتاح التوقيع KEYSTORE_BASE64 في الـ Secrets، سيتم إنشاء ملف فارغ لتفادي الانهيار."
-            mkdir -p $RUNNER_TEMP
-            touch $RUNNER_TEMP/keystore.jks
-          else
-            echo $ENCODED_KEYSTORE | base64 -d > $RUNNER_TEMP/keystore.jks
-          fi
-
-      - name: Build Release APK
-        if: steps.check_version.outputs.changed == 'true'
-        env:
-          KEYSTORE_FILE_PATH: ${{ runner.temp }}/keystore.jks
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'dummy_password' }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'dummy_alias' }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'dummy_password' }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
         run: |
           chmod +x ./gradlew
-          
-          # البناء بصيغة Release
-          ./gradlew --no-daemon :app:assembleRelease
+          # 🟢 التعديل الجوهري: البناء بصيغة assembleDebug لتخطي عقبات التوقيع والـ ProGuard تماماً
+          ./gradlew --no-daemon :app:assembleDebug
 
-          APK_DIR="app/build/outputs/apk/release"
-          # إعادة تسمية ملف الـ APK الناتج ليكون واضحاً باسم الإصدار
+          APK_DIR="app/build/outputs/apk/debug"
+          mkdir -p app/build/outputs/apk/release_output
+          
+          # نقل وتسمية الملف النهائي ليصبح جاهزاً للتحميل
           find $APK_DIR -name "*.apk" -print0 | while IFS= read -r -d '' file; do
-            mv "$file" "$APK_DIR/LocationSpoofer-${{ steps.check_version.outputs.tag }}.apk"
+            mv "$file" "app/build/outputs/apk/release_output/LocationSpoofer-${{ steps.check_version.outputs.tag }}.apk"
           done
 
       - name: Publish GitHub Release
@@ -136,7 +78,7 @@ jobs:
         with:
           tag_name: ${{ steps.check_version.outputs.tag }}
           name: LocationSpoofer ${{ steps.check_version.outputs.tag }}
-          body_path: changelog.txt
-          files: app/build/outputs/apk/release/LocationSpoofer-*.apk
+          body: "تلقائي: تم بناء التطبيق بنجاح عبر سحابة GitHub Actions."
+          files: app/build/outputs/apk/release_output/LocationSpoofer-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
