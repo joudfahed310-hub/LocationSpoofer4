@@ -7,10 +7,10 @@ on:
       - master
     paths:
       - 'app/build.gradle.kts'
-  workflow_dispatch: # تفعيل زر التشغيل اليدوي
+  workflow_dispatch: # تفعيل التشغيل اليدوي
 
 permissions:
-  contents: write # صلاحيات إنشاء الريليز
+  contents: write
 
 jobs:
   build-and-release:
@@ -25,7 +25,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17' # توافق كامل مع إصدار Gradle 8.10.2 المتواجد بالمشروع
+          java-version: '17'
           cache: 'gradle'
 
       - name: Check and Resolve Version
@@ -57,17 +57,23 @@ jobs:
           fi
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
+      # 🟢 خطوة السحر: تفكيك إجبارية التوقيع في ملف Gradle الخاص بالمطور لتخطي خطأ storeFile
+      - name: Strip Signing Configuration
+        if: steps.check_version.outputs.changed == 'true'
+        run: |
+          echo "حذف إعدادات التوقيع الإجبارية لتفادي أخطاء الـ Keystore المفقودة..."
+          sed -i '/signingConfigs {/,/^    }/d' app/build.gradle.kts || true
+          sed -i '/signingConfig = signingConfigs./d' app/build.gradle.kts || true
+          
       - name: Build Debug APK
         if: steps.check_version.outputs.changed == 'true'
         run: |
           chmod +x ./gradlew
-          # 🟢 التعديل الجوهري: البناء بصيغة assembleDebug لتخطي عقبات التوقيع والـ ProGuard تماماً
           ./gradlew --no-daemon :app:assembleDebug
 
           APK_DIR="app/build/outputs/apk/debug"
           mkdir -p app/build/outputs/apk/release_output
           
-          # نقل وتسمية الملف النهائي ليصبح جاهزاً للتحميل
           find $APK_DIR -name "*.apk" -print0 | while IFS= read -r -d '' file; do
             mv "$file" "app/build/outputs/apk/release_output/LocationSpoofer-${{ steps.check_version.outputs.tag }}.apk"
           done
@@ -78,7 +84,7 @@ jobs:
         with:
           tag_name: ${{ steps.check_version.outputs.tag }}
           name: LocationSpoofer ${{ steps.check_version.outputs.tag }}
-          body: "تلقائي: تم بناء التطبيق بنجاح عبر سحابة GitHub Actions."
+          body: "تلقائي: تم بناء التطبيق بنجاح وتجاوز شروط التوقيع الرقمي بنجاح."
           files: app/build/outputs/apk/release_output/LocationSpoofer-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
